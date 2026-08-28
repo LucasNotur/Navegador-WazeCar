@@ -1,88 +1,54 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Map, AdvancedMarker, useMap, useMapsLibrary, RenderingType } from '@vis.gl/react-google-maps';
+import React, { useEffect, useState, useRef, useContext, useSyncExternalStore } from 'react';
+import { AdvancedMarker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { StatusBar } from './StatusBar';
-import { navigationMapStyle } from '../mapStyle';
-import { ServiceOrder } from '../types';
-import { getUserLocation, updateCachedLocation, getCachedLocation } from '../utils/geolocation';
-import { NavigationCameraController } from '../utils/navigationCamera';
+import { NavigationContext } from './AppMapController';
 
 export const NavigationScreen: React.FC<{ 
   onStop: () => void;
   onAddStop?: () => void;
   onTripComplete?: () => void;
-  currentOS?: ServiceOrder | null;
-}> = ({ onStop, onAddStop, onTripComplete, currentOS }) => {
-  const routesLibrary = useMapsLibrary('routes');
+}> = ({ onStop, onAddStop, onTripComplete }) => {
+  const machine = useContext(NavigationContext);
   const map = useMap();
 
-  // Routing State
-  const [activeRoute, setActiveRoute] = useState<google.maps.DirectionsRoute | null>(null);
-  const [altRoute, setAltRoute] = useState<google.maps.DirectionsRoute | null>(null);
-  
+  const snapshot = useSyncExternalStore(
+    (callback) => machine ? machine.subscribe(callback) : () => {},
+    () => machine ? machine.getSnapshot() : null
+  );
+
+  if (!machine || !snapshot) return null;
+
+  const currentOS = snapshot.order;
+  const userLocation = snapshot.origin;
+  const userHeading = snapshot.heading;
+  const currentSpeed = snapshot.speed !== null && !isNaN(snapshot.speed) ? Math.round(snapshot.speed * 3.6) : 0;
+  // The route polyline is now rendered by directionsRenderer in state machine!
+  // So we don't need realRoutePath logic here.
+  const routeInfo = snapshot.route ? {
+    distance: `${(snapshot.route.distanceMeters / 1000).toFixed(1)} km`,
+    duration: `${Math.round(snapshot.route.durationSeconds / 60)} min`,
+    arrivalTime: new Date(Date.now() + snapshot.route.durationSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } : null;
+
   // Traffic Alert State
   const [alertState, setAlertState] = useState<'hidden' | 'expanded' | 'collapsed'>('hidden');
   const [timeSaved, setTimeSaved] = useState(0);
-  const [cooldownUntil, setCooldownUntil] = useState(0);
   
   // Demo / Sim Mode State
   const alertTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const geometryLibrary = useMapsLibrary('geometry');
   const [isFollowingUser, setIsFollowingUser] = useState(true);
-  const [userHeading, setUserHeading] = useState(0);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(getCachedLocation());
-  const navCameraRef = useRef<NavigationCameraController | null>(null);
-
-  // Initialize and manage NavigationCameraController
-  useEffect(() => {
-    if (!map) return;
-    
-    if (!navCameraRef.current) {
-      navCameraRef.current = new NavigationCameraController(map, { tilt: 65, zoom: 19 });
-      
-      navCameraRef.current.onPositionUpdateCallback = (pos, heading, speed) => {
-        setUserLocation(pos);
-        updateCachedLocation(pos);
-        setUserHeading(heading);
-        
-        if (speed !== null && !isNaN(speed) && speed >= 0) {
-          setCurrentSpeed(Math.round(speed * 3.6));
-        } else {
-          setCurrentSpeed(0);
-        }
-      };
-      
-      const cached = getCachedLocation();
-      if (cached) {
-         navCameraRef.current.setInitialPosition(cached);
-         map.panTo(cached); // Force map to move immediately
-         
-         if (currentOS && geometryLibrary) {
-            try {
-              const initialHeading = geometryLibrary.spherical.computeHeading(cached, currentOS.location);
-              navCameraRef.current.setInitialHeading(initialHeading);
-            } catch (e) {}
-         }
-      }
-      
-      navCameraRef.current.start();
-    }
-  }, [map, currentOS, geometryLibrary]);
 
   useEffect(() => {
+    if (!map || !machine) return;
+    const listener = map.addListener('dragstart', () => {
+      setIsFollowingUser(false);
+      machine.setFollowing(false);
+    });
     return () => {
-      if (navCameraRef.current) {
-         navCameraRef.current.stop();
-      }
+      google.maps.event.removeListener(listener);
     };
-  }, []);
-  
-  useEffect(() => {
-    if (navCameraRef.current) {
-      navCameraRef.current.isFollowing = isFollowingUser;
-    }
-  }, [isFollowingUser]);
+  }, [map, machine]);
 
-  const [currentSpeed, setCurrentSpeed] = useState<number | null>(0);
   const [speedLimit, setSpeedLimit] = useState<number>(40);
   const [gpsSignal, setGpsSignal] = useState<boolean>(true);
   const [isOverspeeding, setIsOverspeeding] = useState<boolean>(false);
@@ -90,24 +56,9 @@ export const NavigationScreen: React.FC<{
   const [isPanelExpanded, setIsPanelExpanded] = useState<boolean>(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState<boolean>(false);
   const [showSettingsToast, setShowSettingsToast] = useState<boolean>(false);
-  const [showRangeLayer, setShowRangeLayer] = useState<boolean>(false);
-  const [mapZoom, setMapZoom] = useState<number>(14);
-  const [isArrivalPhase, setIsArrivalPhase] = useState<boolean>(false);
 
-  // Real Arrival Phase Detection
-  useEffect(() => {
-    if (!userLocation || !currentOS || !geometryLibrary) return;
-    try {
-      const dist = geometryLibrary.spherical.computeDistanceBetween(userLocation, currentOS.location);
-      if (dist <= 200 && !isArrivalPhase) {
-        setIsArrivalPhase(true);
-      } else if (dist > 200 && isArrivalPhase) {
-        setIsArrivalPhase(false);
-      }
-    } catch (e) {
-      // ignore
-    }
-  }, [userLocation, currentOS, geometryLibrary, isArrivalPhase]);
+  // isArrivalPhase is natively handled by 'arrived' status if we want, but we can do a visual check here if we want styling 
+  const isArrivalPhase = snapshot.status === "arrived";
 
   const handleFinish = () => {
     setShowFinishConfirm(true);
@@ -115,6 +66,7 @@ export const NavigationScreen: React.FC<{
 
   const confirmFinish = () => {
     setShowFinishConfirm(false);
+    machine.cancel();
     if (onTripComplete) {
       onTripComplete();
     } else {
@@ -127,7 +79,6 @@ export const NavigationScreen: React.FC<{
     setTimeout(() => setShowSettingsToast(false), 2000);
   };
 
-
   useEffect(() => {
     if (!gpsSignal || currentSpeed === null) {
       setIsOverspeeding(false);
@@ -135,122 +86,19 @@ export const NavigationScreen: React.FC<{
       return;
     }
 
-    // Overspeed logic with 3 km/h tolerance
     const TOLERANCE = 3;
     const overspeed = currentSpeed > (speedLimit + TOLERANCE);
     setIsOverspeeding(overspeed);
 
-    // Haptic/audio alert on threshold crossed
     if (overspeed && !overspeedAlertedRef.current) {
       overspeedAlertedRef.current = true;
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate([100, 50, 100]); // Short warning pattern
+        navigator.vibrate([100, 50, 100]); 
       }
     } else if (!overspeed) {
       overspeedAlertedRef.current = false;
     }
   }, [currentSpeed, speedLimit, gpsSignal]);
-
-  const [realRoutePath, setRealRoutePath] = useState<google.maps.LatLngLiteral[] | null>(null);
-  const lastRecalcTime = useRef<number>(0);
-  const [routeInfo, setRouteInfo] = useState<{distance: string, duration: string, arrivalTime: string} | null>(null);
-
-// Route deviation detection
-  useEffect(() => {
-    if (!realRoutePath || !userLocation || !geometryLibrary || !window.google) return;
-    
-    // Throttle checks
-    const now = Date.now();
-    if (now - lastRecalcTime.current < 5000) return; // wait at least 5s between recalcs
-
-    try {
-      const point = new window.google.maps.LatLng(userLocation.lat, userLocation.lng);
-      const poly = new window.google.maps.Polyline({ path: realRoutePath });
-      
-      // 0.0005 degrees is roughly 50 meters
-      const isOnRoute = geometryLibrary.poly.isLocationOnEdge(point, poly, 0.0005);
-      
-      if (!isOnRoute) {
-        console.log("Off route detected! Recalculating...");
-        lastRecalcTime.current = now;
-        setRealRoutePath(null); // This clears the current route and triggers fetchRoute
-      }
-    } catch (e) {
-      console.warn("Error checking route deviation:", e);
-    }
-  }, [userLocation, realRoutePath, geometryLibrary]);
-
-  // Fetch real route using Routes API v2
-  useEffect(() => {
-    if (!userLocation || !currentOS || !geometryLibrary || realRoutePath) return;
-
-    let isMounted = true;
-    const fetchRoute = async () => {
-
-      const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-      if (!apiKey) {
-        console.warn("No Google Maps API key found in env vars for Routes API.");
-        return;
-      }
-      
-      const body = {
-        origin: { location: { latLng: { latitude: userLocation.lat, longitude: userLocation.lng } } },
-        destination: { location: { latLng: { latitude: currentOS.location.lat, longitude: currentOS.location.lng } } },
-        travelMode: "DRIVE",
-        routingPreference: "TRAFFIC_AWARE"
-      };
-      
-      try {
-        const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline'
-          },
-          body: JSON.stringify(body)
-        });
-        
-        if (!response.ok) throw new Error(`Routes API request failed: ${response.status}`);
-        
-        const data = await response.json();
-        
-        if (data.routes && data.routes.length > 0 && isMounted) {
-          const route = data.routes[0];
-          const path = geometryLibrary.encoding.decodePath(route.polyline.encodedPolyline);
-          setRealRoutePath(path.map(p => ({ lat: p.lat(), lng: p.lng() })));
-          
-          const distKm = (route.distanceMeters / 1000).toFixed(1);
-          const durSecs = parseInt(route.duration.replace('s', ''));
-          const durMins = Math.round(durSecs / 60);
-          const arrivalDate = new Date(Date.now() + durSecs * 1000);
-          const arrivalStr = arrivalDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-          
-          setRouteInfo({
-            distance: `${distKm} km`,
-            duration: durMins > 60 ? `${Math.floor(durMins/60)} hr ${durMins%60} min` : `${durMins} min`,
-            arrivalTime: arrivalStr
-          });
-        }
-      } catch (err) {
-        console.error("Error fetching route:", err);
-      }
-
-
-    };
-    fetchRoute();
-
-    return () => { isMounted = false; };
-  }, [userLocation, currentOS, geometryLibrary, realRoutePath]);
-
-  // Periodic Traffic Checking (Real Engine Logic) - Removed mock
-  useEffect(() => {
-    const checkTraffic = () => {
-      if (Date.now() < cooldownUntil) return; // In cooldown period
-    };
-    const interval = setInterval(checkTraffic, 30000); // Check every 30s
-    return () => clearInterval(interval);
-  }, [cooldownUntil, alertState]);
 
   // Auto-shrink behavior: After 15s without interaction, shrink to collapsed badge
   useEffect(() => {
@@ -275,31 +123,12 @@ export const NavigationScreen: React.FC<{
   };
 
   const handleAcceptAlt = () => {
-    
-    if (altRoute) {
-      setActiveRoute(altRoute);
-      setAltRoute(null);
-    }
     setAlertState('hidden');
   };
 
   const handleDismissAlert = () => {
-    setCooldownUntil(Date.now() + 5 * 60 * 1000);
     setAlertState('hidden');
-    setAltRoute(null);
   };
-
-  // --- Dynamic Stats Computation ---
-  
-  let distanceText = '... km';
-  let durationVal = '... min';
-  let arrivalTime = '--:--';
-
-  if (routeInfo) {
-    distanceText = routeInfo.distance;
-    durationVal = routeInfo.duration;
-    arrivalTime = routeInfo.arrivalTime;
-  }
 
   if (!userLocation) {
     return (
@@ -321,30 +150,11 @@ export const NavigationScreen: React.FC<{
         Trigger Traffic Jam (Test)
       </button>
 
-      {/* Map Background */}
-      <div className="absolute inset-0 z-0 pointer-events-auto">
-        <Map
-          // mapId={import.meta.env.VITE_GOOGLE_MAP_ID || "DEMO_MAP_ID"}
-          // renderingType={RenderingType.VECTOR}
-          mapTypeId={"roadmap"}
-          defaultCenter={userLocation!}
-          defaultZoom={19}
-          disableDefaultUI={true}
-          styles={navigationMapStyle}
-          gestureHandling="greedy"
-          onZoomChanged={(e) => setMapZoom(e.detail.zoom)}
-          onDrag={() => { setIsFollowingUser(false); }}
-        >
-          {/* Navigation Elements */}
-          {realRoutePath ? (
-            <ColoredPolyline path={realRoutePath} color="#0A84FF" />
-          ) : userLocation && currentOS ? (
-            <ColoredPolyline path={[userLocation, currentOS.location]} color="#8E8E93" />
-          ) : null}
-          
+      {/* Map Background overlays removed since it's on top of shared map */}
+      <div className="absolute inset-0 z-0 pointer-events-none">
           {/* Vehicle Marker */}
-          {userLocation && (
-            <AdvancedMarker position={userLocation} zIndex={100}>
+          {snapshot.origin && (
+            <AdvancedMarker position={snapshot.origin} zIndex={100}>
               <div className="relative flex items-center justify-center">
                 {isArrivalPhase && (
                   <div className="absolute w-24 h-24 bg-[#0A84FF]/20 rounded-full blur-[8px] animate-pulse pointer-events-none"></div>
@@ -359,8 +169,8 @@ export const NavigationScreen: React.FC<{
           )}
 
           {/* Destination Pin */}
-          {currentOS && (
-            <AdvancedMarker position={currentOS.location} zIndex={40}>
+          {snapshot.destination && (
+            <AdvancedMarker position={snapshot.destination} zIndex={40}>
                <div className="relative w-10 h-10 bg-[#FF9F0A] rounded-full flex items-center justify-center shadow-[0_4px_10px_rgba(0,0,0,0.5)] border-2 border-[#1C1C1E] -translate-y-[20px]">
                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
@@ -370,70 +180,6 @@ export const NavigationScreen: React.FC<{
             </AdvancedMarker>
           )}
 
-          {/* Range Isochrone Polygon */}
-          {showRangeLayer && (
-            <>
-              <RangePolygon 
-                path={[
-                  { lat: 37.785, lng: -122.430 },
-                  { lat: 37.788, lng: -122.420 },
-                  { lat: 37.781, lng: -122.412 },
-                  { lat: 37.772, lng: -122.405 },
-                  { lat: 37.765, lng: -122.415 },
-                  { lat: 37.760, lng: -122.425 },
-                  { lat: 37.768, lng: -122.435 },
-                  { lat: 37.775, lng: -122.440 },
-                ]}
-                color="#8B0000"
-              />
-              {/* Range Distance Badge */}
-              <AdvancedMarker position={{ lat: 37.781, lng: -122.412 }} zIndex={45}>
-                 <div className="bg-[#8B0000]/80 backdrop-blur-sm rounded-full px-2 py-0.5 border border-white/20 shadow-sm flex items-center justify-center -translate-y-4 translate-x-4">
-                   <span className="text-white font-bold text-[12px]">12 km</span>
-                 </div>
-              </AdvancedMarker>
-            </>
-          )}
-
-          {/* Legacy elements removed */}
-
-          {/* Discovery Layer: Multiple Charging Stations */}
-          {showRangeLayer && (
-             <>
-               {mapZoom < 12.5 ? (
-                 // Clustered View
-                 <AdvancedMarker position={{ lat: 37.7750, lng: -122.4160 }} zIndex={30}>
-                    <div 
-                      className="relative w-10 h-10 bg-[#FFD60A] rounded-full flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.5)] border-2 border-[#1C1C1E] cursor-pointer"
-                      onClick={() => console.log("Station selected")}
-                    >
-                      <span className="text-[#1C1C1E] font-bold text-[15px]">+4</span>
-                    </div>
-                 </AdvancedMarker>
-               ) : (
-                 // Individual Pins View
-                 [
-                   { lat: 37.7760, lng: -122.4130 },
-                   { lat: 37.7725, lng: -122.4180 },
-                   { lat: 37.7790, lng: -122.4210 },
-                   { lat: 37.7730, lng: -122.4120 },
-                 ].map((pos, idx) => (
-                   <AdvancedMarker key={idx} position={pos} zIndex={30}>
-                      <div 
-                        className="relative w-7 h-7 bg-[#FFD60A] rounded-full flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.4)] border border-[#1C1C1E] cursor-pointer hover:scale-110 transition-transform"
-                        onClick={() => console.log("Station selected")}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1C1C1E" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="#1C1C1E" />
-                        </svg>
-                      </div>
-                   </AdvancedMarker>
-                 ))
-               )}
-             </>
-          )}
-
-        </Map>
       </div>
 
       <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-[#05070A]/90 to-transparent pointer-events-none z-0" />
@@ -588,10 +334,10 @@ export const NavigationScreen: React.FC<{
              </div>
              <div className="flex items-baseline gap-2">
                <span className="text-white text-[28px] font-bold tracking-tight leading-none">
-                 {distanceText.split(' ')[0] || '...'}
+                 {routeInfo?.distance.split(' ')[0] || '...'}
                </span>
                <span className="text-[#AEAEB2] text-[18px] font-medium">
-                 {distanceText.split(' ')[1] || 'km'}
+                 {routeInfo?.distance.split(' ')[1] || 'km'}
                </span>
              </div>
              <div className="text-white text-[18px] font-medium ml-2 border-l border-white/20 pl-4 py-1">
@@ -663,10 +409,10 @@ export const NavigationScreen: React.FC<{
              </div>
              <div className="flex items-baseline gap-1.5">
                <span className="text-white text-[34px] font-bold tracking-tight leading-none">
-                 {distanceText.split(' ')[0] || '...'}
+                 {routeInfo?.distance.split(' ')[0] || '...'}
                </span>
                <span className="text-[#AEAEB2] text-[20px] font-medium">
-                 {distanceText.split(' ')[1] || 'km'}
+                 {routeInfo?.distance.split(' ')[1] || 'km'}
                </span>
              </div>
            </div>
@@ -697,10 +443,10 @@ export const NavigationScreen: React.FC<{
            <div className="flex flex-col items-center">
              <div className="flex items-baseline gap-1">
                <span className="text-white text-[26px] font-bold tracking-tight">
-                 {distanceText.split(' ')[0] || '...'}
+                 {routeInfo?.distance.split(' ')[0] || '...'}
                </span>
                <span className="text-white text-[15px] font-medium">
-                 {distanceText.split(' ')[1] || 'km'}
+                 {routeInfo?.distance.split(' ')[1] || 'km'}
                </span>
              </div>
              <span className="text-[#8E8E93] text-[13px] font-medium mt-0.5">Distance</span>
@@ -709,10 +455,10 @@ export const NavigationScreen: React.FC<{
            <div className="flex flex-col items-center">
              <div className="flex items-baseline gap-1">
                <span className="text-white text-[26px] font-bold tracking-tight">
-                 {durationVal.split(' ')[0] || '...'}
+                 {routeInfo?.duration.split(' ')[0] || '...'}
                </span>
                <span className="text-white text-[15px] font-medium">
-                 {durationVal.split(' ')[1] || 'min'}
+                 {routeInfo?.duration.split(' ')[1] || 'min'}
                </span>
              </div>
              <span className="text-[#8E8E93] text-[13px] font-medium mt-0.5">Time</span>
@@ -720,7 +466,7 @@ export const NavigationScreen: React.FC<{
 
            <div className="flex flex-col items-center">
              <div className="flex items-baseline gap-1">
-               <span className="text-white text-[26px] font-bold tracking-tight">{arrivalTime}</span>
+               <span className="text-white text-[26px] font-bold tracking-tight">{routeInfo?.arrivalTime || '--:--'}</span>
              </div>
              <span className="text-[#8E8E93] text-[13px] font-medium mt-0.5">Arrival</span>
            </div>
@@ -765,49 +511,6 @@ export const NavigationScreen: React.FC<{
 
 // --- Map Helper Components ---
 
-const ColoredPolyline = ({ path, color, zIndex = 1 }: { path: google.maps.LatLngLiteral[], color: string, zIndex?: number }) => {
-  const map = useMap();
-  
-  useEffect(() => {
-    if (!map) return;
-    
-    const coreLine = new google.maps.Polyline({
-      path,
-      strokeColor: color,
-      strokeOpacity: 1.0,
-      strokeWeight: 6,
-      map,
-      zIndex: zIndex + 2,
-    });
-
-    const midGlow = new google.maps.Polyline({
-      path,
-      strokeColor: color,
-      strokeOpacity: 0.5,
-      strokeWeight: 12,
-      map,
-      zIndex: zIndex + 1,
-    });
-
-    const outerGlow = new google.maps.Polyline({
-      path,
-      strokeColor: color,
-      strokeOpacity: 0.2,
-      strokeWeight: 20,
-      map,
-      zIndex,
-    });
-
-    return () => {
-      coreLine.setMap(null);
-      midGlow.setMap(null);
-      outerGlow.setMap(null);
-    };
-  }, [map, path, color, zIndex]);
-  
-  return null;
-};
-
 const MapCenterButton = ({ userLocation, onRecenter }: { userLocation: { lat: number, lng: number } | null, onRecenter: () => void }) => {
   return (
     <button 
@@ -847,56 +550,6 @@ const RangePolygon = ({ path, color }: { path: google.maps.LatLngLiteral[], colo
       if (polygonRef.current) polygonRef.current.setMap(null);
     };
   }, [map, path, color]);
-  
-  return null;
-};
-const SmartAPIPath = ({ route, isAlternative }: { route: google.maps.DirectionsRoute, isAlternative?: boolean }) => {
-  const map = useMap();
-  
-  useEffect(() => {
-    if (!map || !route) return;
-    
-    const lines: google.maps.Polyline[] = [];
-    
-    route.legs[0].steps.forEach((step) => {
-      // Speed in km/h = (meters / 1000) / (seconds / 3600)
-      const speedKmh = (step.distance.value / 1000) / (step.duration.value / 3600);
-      
-      // Speed-based color segmentation
-      let color = '#0A84FF'; // Default / Fast
-      if (speedKmh < 25) color = '#FF453A'; // Congested / Red
-      else if (speedKmh < 50) color = '#FFD60A'; // Moderate / Yellow
-      
-      // Alternative routes are forced to green to stand out as the solution
-      if (isAlternative) {
-        color = '#30D158'; 
-      }
-
-      const coreLine = new google.maps.Polyline({
-        path: step.path,
-        strokeColor: color,
-        strokeOpacity: 1.0,
-        strokeWeight: 6,
-        map,
-        zIndex: isAlternative ? 3 : 2,
-      });
-      
-      const glowLine = new google.maps.Polyline({
-        path: step.path,
-        strokeColor: color,
-        strokeOpacity: 0.3,
-        strokeWeight: 14,
-        map,
-        zIndex: isAlternative ? 2 : 1,
-      });
-      
-      lines.push(coreLine, glowLine);
-    });
-    
-    return () => {
-      lines.forEach(l => l.setMap(null));
-    };
-  }, [map, route, isAlternative]);
   
   return null;
 };
