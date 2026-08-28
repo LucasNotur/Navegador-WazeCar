@@ -1,0 +1,10 @@
+{
+  "name": "Astrum EV Navigator",
+  "description": "Navegador inteligente plug-and-play para veículos elétricos com simulação de rota em tempo real, gestão de carregadores, relatórios e suporte offline.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

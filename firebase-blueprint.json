@@ -1,0 +1,29 @@
+{
+  "collections": [
+    {
+      "name": "service_orders",
+      "schema": {
+        "id": "string",
+        "type": "string",
+        "status": "string",
+        "client": "string",
+        "address": "string",
+        "location": {
+          "lat": "number",
+          "lng": "number"
+        },
+        "description": "string",
+        "equipment": "array",
+        "priority": "string",
+        "distance": "string",
+        "time": "string"
+      },
+      "rules": [
+        {
+          "allow": "read, write",
+          "condition": "true"
+        }
+      ]
+    }
+  ]
+}
