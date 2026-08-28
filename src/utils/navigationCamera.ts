@@ -118,12 +118,19 @@ export class NavigationCameraController {
   }
 
   private onPositionUpdate(pos: GeolocationPosition): void {
+    // Prevent teleportation to Marco Zero (cellular triangulation fallback)
+    // by ignoring updates with very bad accuracy (e.g., > 1000 meters)
+    if (pos.coords.accuracy > 1000 && this.lastPosition) {
+       console.warn(`Ignorando posição com baixa precisão (${pos.coords.accuracy}m). Mantendo última posição.`);
+       return;
+    }
+
     const newPosition: LatLngLiteral = {
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
     };
     
-    console.log('Nova posição recebida:', newPosition);
+    console.log(`Nova posição recebida: lat=${newPosition.lat.toFixed(5)}, lng=${newPosition.lng.toFixed(5)}, precisão=${pos.coords.accuracy}m`);
 
     // Prioriza o heading nativo do GPS quando o usuário está realmente se movendo;
     // parado (speed baixo/heading null), calcula pelo deslocamento entre os 2 últimos pontos.

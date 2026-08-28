@@ -54,6 +54,8 @@ export const NavigationScreen: React.FC<{
       const cached = getCachedLocation();
       if (cached) {
          navCameraRef.current.setInitialPosition(cached);
+         map.panTo(cached); // Force map to move immediately
+         
          if (currentOS && geometryLibrary) {
             try {
               const initialHeading = geometryLibrary.spherical.computeHeading(cached, currentOS.location);
@@ -88,7 +90,7 @@ export const NavigationScreen: React.FC<{
   const [isPanelExpanded, setIsPanelExpanded] = useState<boolean>(false);
   const [showFinishConfirm, setShowFinishConfirm] = useState<boolean>(false);
   const [showSettingsToast, setShowSettingsToast] = useState<boolean>(false);
-  const [showRangeLayer, setShowRangeLayer] = useState<boolean>(true);
+  const [showRangeLayer, setShowRangeLayer] = useState<boolean>(false);
   const [mapZoom, setMapZoom] = useState<number>(14);
   const [isArrivalPhase, setIsArrivalPhase] = useState<boolean>(false);
 
@@ -322,14 +324,14 @@ export const NavigationScreen: React.FC<{
       {/* Map Background */}
       <div className="absolute inset-0 z-0 pointer-events-auto">
         <Map
-          mapId={import.meta.env.VITE_GOOGLE_MAP_ID || "DEMO_MAP_ID"}
+          // mapId={import.meta.env.VITE_GOOGLE_MAP_ID || "DEMO_MAP_ID"}
+          // renderingType={RenderingType.VECTOR}
           mapTypeId={"roadmap"}
           defaultCenter={userLocation!}
           defaultZoom={19}
           disableDefaultUI={true}
           styles={navigationMapStyle}
           gestureHandling="greedy"
-          renderingType={RenderingType.VECTOR}
           onZoomChanged={(e) => setMapZoom(e.detail.zoom)}
           onDrag={() => { setIsFollowingUser(false); }}
         >
@@ -452,16 +454,8 @@ export const NavigationScreen: React.FC<{
       )}
       
 
-      {/* Top Right Floating Button (Charging Layer Toggle) */}
+      {/* Top Right Floating Buttons */}
       <div className="absolute top-16 right-4 z-10 pointer-events-auto flex flex-col gap-3">
-        <button 
-          onClick={() => setShowRangeLayer(!showRangeLayer)}
-          className={`w-12 h-12 rounded-full shadow-lg border transition-all duration-200 flex items-center justify-center active:scale-95 ${showRangeLayer ? 'bg-[#FFD60A] border-[#FFD60A]' : 'bg-[#1C1C1E] border-white/10'}`}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={showRangeLayer ? "#1C1C1E" : "white"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill={showRangeLayer ? "#1C1C1E" : "none"} />
-          </svg>
-        </button>
         {/* Center on Vehicle Button */}
         <MapCenterButton userLocation={userLocation} onRecenter={() => {
           setIsFollowingUser(true);
@@ -528,7 +522,7 @@ export const NavigationScreen: React.FC<{
       )}
 
       {/* Speed Indicators (Bottom-Left) */}
-      <div className="absolute bottom-[230px] left-4 z-10 flex flex-col gap-3 pointer-events-none items-center">
+      <div className="absolute bottom-[260px] left-4 z-10 flex flex-col gap-3 pointer-events-none items-center">
         {/* Speed Limit */}
         <div className={`w-[52px] h-[52px] bg-white rounded-full border-[5px] flex flex-col items-center justify-center shadow-lg transition-colors duration-200 ${!gpsSignal ? 'border-[#8E8E93]' : 'border-[#FF3B30]'}`}>
           <span className={`text-[20px] font-bold tracking-tight ${!gpsSignal ? 'text-[#8E8E93]' : 'text-black'}`}>

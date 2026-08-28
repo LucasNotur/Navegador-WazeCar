@@ -103,7 +103,8 @@ export const MainMapScreen: React.FC<{ onSearch: () => void, onSelectOS: (os: Se
       {/* Real Google Map */}
       <div className="absolute inset-0 z-0 pointer-events-auto">
         <Map
-          mapId={import.meta.env.VITE_GOOGLE_MAP_ID || "DEMO_MAP_ID"}
+          // mapId={import.meta.env.VITE_GOOGLE_MAP_ID || "DEMO_MAP_ID"}
+          // renderingType={RenderingType.VECTOR}
           mapTypeId={"roadmap"}
           defaultCenter={userLocation!}
           defaultZoom={14}
@@ -111,7 +112,6 @@ export const MainMapScreen: React.FC<{ onSearch: () => void, onSelectOS: (os: Se
           styles={darkMapStyle}
           gestureHandling="greedy"
           internalUsageAttributionIds={["gmp_mcp_codeassist_v1_aistudio"]}
-          renderingType={RenderingType.VECTOR}
         >
           {userLocation && (
             <AdvancedMarker position={userLocation} zIndex={100}>
